@@ -1,0 +1,485 @@
+<!doctype html>
+<html lang="de-CH">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>HeatsBox Steuerung</title>
+<link rel="apple-touch-icon" href="icon-180.png">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" type="image/png" href="icon-180.png">
+<meta name="apple-mobile-web-app-title" content="HeatsBox">
+<meta name="theme-color" content="#F1F3F0">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500;12..96,700&family=Instrument+Sans:wght@400;500;600&family=JetBrains+Mono:wght@500&display=swap">
+<style>
+/* Layout: one narrow phone column — status panel on top, settings below, protocol log folded away */
+:root{
+  --bg:#F1F3F0; --surface:#FFFFFF; --chip:#FFFFFF; --sunk:#E5E8E4; --line:#D3D8D2;
+  --fg:#1C211F; --muted:#5D6762;
+  --heat:#D9541E; --heat-soft:#FBE3D6; --cool:#2F7A78;
+  --ok:#2E7D4F; --warn:#B7791F; --bad:#B42318;
+  --display:"Bricolage Grotesque", "Avenir Next", system-ui, sans-serif;
+  --body:"Instrument Sans", -apple-system, "Segoe UI", system-ui, sans-serif;
+  --mono:"JetBrains Mono", ui-monospace, "SF Mono", Menlo, monospace;
+  color-scheme:light;
+}
+@media (prefers-color-scheme: dark){ :root:not([data-theme="light"]){
+  --bg:#121514; --surface:#1B1F1D; --chip:#3B433F; --sunk:#252A27; --line:#323935;
+  --fg:#EBEEEA; --muted:#9AA49F;
+  --heat:#F0743D; --heat-soft:#3A2419; --cool:#5FB3AF;
+  --ok:#5DBB84; --warn:#E0A84A; --bad:#F07167; color-scheme:dark; } }
+:root[data-theme="dark"]{
+  --bg:#121514; --surface:#1B1F1D; --chip:#3B433F; --sunk:#252A27; --line:#323935;
+  --fg:#EBEEEA; --muted:#9AA49F;
+  --heat:#F0743D; --heat-soft:#3A2419; --cool:#5FB3AF;
+  --ok:#5DBB84; --warn:#E0A84A; --bad:#F07167; color-scheme:dark; }
+
+*{box-sizing:border-box}
+html{-webkit-text-size-adjust:100%}
+body{margin:0;background:var(--bg);color:var(--fg);font:16px/1.45 var(--body);
+  padding-left:max(16px, env(safe-area-inset-left, 0px));padding-right:max(16px, env(safe-area-inset-right, 0px));
+  padding-block:calc(env(safe-area-inset-top, 0px) + 14px) calc(env(safe-area-inset-bottom, 0px) + 28px)}
+main{max-width:460px;margin:0 auto;display:grid;gap:18px}
+button,input,select{font:inherit;color:inherit}
+button{cursor:pointer}
+:focus-visible{outline:2px solid var(--heat);outline-offset:2px}
+
+header{display:flex;align-items:center;gap:12px;justify-content:space-between}
+.brand{font:700 1.35rem/1 var(--display);letter-spacing:-.01em}
+.brand small{display:block;font:500 .72rem/1.3 var(--body);color:var(--muted);letter-spacing:.06em;text-transform:uppercase;margin-top:4px}
+.pill{display:inline-flex;align-items:center;gap:7px;font-size:.8rem;font-weight:600;padding:6px 11px;border-radius:999px;background:var(--sunk);color:var(--muted);white-space:nowrap}
+.pill i{width:8px;height:8px;border-radius:50%;background:currentColor}
+.pill.on{color:var(--ok)} .pill.busy{color:var(--warn)}
+
+/* status panel */
+.panel{background:var(--surface);border:1px solid var(--line);border-radius:22px;padding:18px;display:grid;gap:14px}
+.gauge{display:flex;align-items:flex-end;justify-content:space-between;gap:12px}
+.temp{font:700 4.2rem/0.9 var(--display);letter-spacing:-.04em;font-variant-numeric:tabular-nums}
+.temp sup{font-size:1.4rem;vertical-align:top;margin-left:2px;color:var(--muted);font-weight:500}
+.meta{display:grid;gap:4px;text-align:right;font-size:.85rem;color:var(--muted)}
+.meta b{color:var(--fg);font-weight:600;font-variant-numeric:tabular-nums}
+.state{display:flex;align-items:center;gap:10px;padding:12px 14px;border-radius:14px;background:var(--sunk)}
+.state .dot{width:10px;height:10px;border-radius:50%;background:var(--muted);flex:none}
+.state.heating{background:var(--heat-soft)} .state.heating .dot{background:var(--heat);animation:pulse 1.4s ease-in-out infinite}
+.state.waiting .dot{background:var(--cool)}
+.state-text{min-width:0}
+.state-text strong{display:block;font-weight:600}
+.state-text span{font-size:.85rem;color:var(--muted);font-variant-numeric:tabular-nums}
+.bar{height:6px;border-radius:6px;background:var(--sunk);overflow:hidden}
+.bar>div{height:100%;width:0;background:linear-gradient(90deg,var(--cool),var(--heat));transition:width .9s linear}
+@keyframes pulse{50%{opacity:.35}}
+@media (prefers-reduced-motion: reduce){.state.heating .dot{animation:none}.bar>div{transition:none}}
+
+/* settings */
+.section{display:grid;gap:10px}
+.label{font-size:.74rem;font-weight:600;text-transform:uppercase;letter-spacing:.08em;color:var(--muted);display:flex;justify-content:space-between;gap:8px}
+.label em{font-style:normal;text-transform:none;letter-spacing:0;font-weight:500}
+.stepper{display:grid;grid-template-columns:56px 1fr 56px;align-items:center;background:var(--surface);border:1px solid var(--line);border-radius:16px;overflow:hidden}
+.stepper button{height:56px;border:0;background:none;font-size:1.6rem;color:var(--heat)}
+.stepper button:active{background:var(--sunk)}
+.stepper output{text-align:center;font:700 1.9rem/1 var(--display);font-variant-numeric:tabular-nums}
+.seg{display:grid;grid-auto-flow:column;grid-auto-columns:1fr;gap:4px;padding:4px;background:var(--sunk);border-radius:14px}
+.seg button{border:0;background:none;padding:10px 6px;border-radius:10px;font-size:.9rem;font-weight:500;color:var(--muted);line-height:1.2}
+.seg button[aria-pressed="true"]{background:var(--chip);color:var(--fg);font-weight:600;box-shadow:0 1px 2px rgba(0,0,0,.12)}
+.row{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+.field{display:flex;align-items:center;gap:8px;background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:8px 12px}
+.field input{border:0;background:none;width:4.5em;font:600 1.1rem var(--mono);text-align:right;padding:0}
+.field input[type=time]{width:auto;text-align:left}
+.hint{font-size:.82rem;color:var(--muted)}
+.hint.est{color:var(--warn)}
+.summary{font-size:.92rem;padding:12px 14px;border-radius:14px;border:1px dashed var(--line);font-variant-numeric:tabular-nums}
+.summary b{font-weight:600}
+
+.btn{border:0;border-radius:16px;padding:16px;font-weight:600;font-size:1.05rem;width:100%}
+.btn.primary{background:var(--heat);color:#fff}
+.btn.secondary{background:var(--sunk);color:var(--fg)}
+.btn.stop{background:none;border:1.5px solid var(--bad);color:var(--bad)}
+.btn:disabled{opacity:.45;cursor:not-allowed}
+.btn.small{padding:10px 14px;font-size:.9rem;width:auto;border-radius:12px}
+
+.notice{padding:12px 14px;border-radius:14px;font-size:.88rem;background:var(--sunk)}
+.notice.warn{border-left:3px solid var(--warn)}
+.notice.bad{border-left:3px solid var(--bad)}
+
+details{border-top:1px solid var(--line);padding-top:12px}
+summary{cursor:pointer;font-size:.85rem;color:var(--muted);font-weight:600}
+#log{margin-top:10px;max-height:220px;overflow:auto;font:500 .74rem/1.55 var(--mono);background:var(--sunk);border-radius:12px;padding:10px;white-space:pre-wrap;word-break:break-all}
+.box-name{display:flex;gap:8px;align-items:center}
+.box-name input{flex:1;min-width:0;background:var(--surface);border:1px solid var(--line);border-radius:10px;padding:9px 11px}
+footer{font-size:.75rem;color:var(--muted);text-align:center}
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <div class="brand">HeatsBox<small>Eigene Steuerung · GO 2.0</small></div>
+    <span id="conn" class="pill"><i></i><span>Nicht verbunden</span></span>
+  </header>
+
+  <div id="noBt" class="notice bad" hidden>
+    Dieser Browser kann kein Bluetooth. Öffne die Seite auf dem iPhone in der App <b>Bluefy</b>. Safari geht leider nicht.
+    <div class="row" style="margin-top:10px"><button class="btn small secondary" id="demoBtn" type="button">Demo ansehen</button></div>
+  </div>
+
+  <div id="offline" class="notice" hidden>Kein Internet. Kein Problem: Die Box wird direkt per Bluetooth gesteuert.</div>
+
+  <button id="connectBtn" class="btn primary" type="button">Mit HeatsBox verbinden</button>
+
+  <section class="panel" aria-live="polite">
+    <div class="gauge">
+      <div class="temp" id="tNow">–<sup>°C</sup></div>
+      <div class="meta">
+        <div>Akku <b id="batt">–</b></div>
+        <div>Ziel <b id="tTarget">–</b></div>
+      </div>
+    </div>
+    <div class="state" id="state">
+      <span class="dot"></span>
+      <div class="state-text"><strong id="stateTitle">Keine Verbindung</strong><span id="stateSub">Tippe auf „Mit HeatsBox verbinden“.</span></div>
+    </div>
+    <div class="bar" id="barWrap" hidden><div id="bar"></div></div>
+    <button id="stopBtn" class="btn stop" type="button" hidden>Heizen / Timer stoppen</button>
+  </section>
+
+  <section class="section">
+    <div class="label">Temperatur</div>
+    <div class="stepper">
+      <button type="button" id="tMinus" aria-label="5 Grad weniger">−</button>
+      <output id="tOut">70 °C</output>
+      <button type="button" id="tPlus" aria-label="5 Grad mehr">+</button>
+    </div>
+  </section>
+
+  <section class="section">
+    <div class="label">Portion</div>
+    <div class="seg" id="segPortion">
+      <button type="button" data-v="0">Klein</button>
+      <button type="button" data-v="2">Mittel</button>
+      <button type="button" data-v="1">Gross</button>
+    </div>
+  </section>
+
+  <section class="section">
+    <div class="label">Heizmodus</div>
+    <div class="seg" id="segMode">
+      <button type="button" data-v="0">Kochen</button>
+      <button type="button" data-v="1">Schnelles<br>Erhitzen</button>
+      <button type="button" data-v="2">Schonendes<br>Erwärmen</button>
+    </div>
+  </section>
+
+  <section class="section">
+    <div class="label">Heizdauer <em id="durHint"></em></div>
+    <div class="row">
+      <label class="field"><input id="durMin" type="number" inputmode="decimal" min="1" max="180" step="0.25"> <span class="hint">Min.</span></label>
+    </div>
+  </section>
+
+  <section class="section">
+    <div class="label">Wann?</div>
+    <div class="seg" id="segWhen">
+      <button type="button" data-v="now">Sofort starten</button>
+      <button type="button" data-v="at">Fertig um …</button>
+    </div>
+    <div class="row" id="atRow" hidden>
+      <label class="field"><span class="hint">Essen fertig um</span><input id="atTime" type="time" value="12:00"></label>
+    </div>
+    <div class="summary" id="summary"></div>
+  </section>
+
+  <button id="startBtn" class="btn primary" type="button" disabled>Starten</button>
+
+  <details>
+    <summary>Meine Box</summary>
+    <div class="section" style="margin-top:10px">
+      <p class="hint" style="margin:0">Beide Boxen heissen „HeatsBox Go 2.0“. Gib der verbundenen Box einen Namen. Die App warnt dich dann, wenn du aus Versehen die andere erwischst.</p>
+      <div class="box-name"><input id="boxName" placeholder="z. B. Meine Box" maxlength="30"><button class="btn small secondary" id="saveBox" type="button">Merken</button></div>
+      <div class="hint" id="boxInfo"></div>
+    </div>
+  </details>
+
+  <details>
+    <summary>Protokoll (für Fehlersuche)</summary>
+    <div id="log"></div>
+  </details>
+
+  <footer>Inoffizielle App · Nutzung auf eigenes Risiko</footer>
+</main>
+
+<script>
+(() => {
+'use strict';
+// ---- Protocol (from Bluetooth capture) ----
+// Service 0xFFE0, characteristic 0xFFE1: ASCII lines ending in \r\n.
+// App -> Box: m<mode> A<portion> F<delay s> t<temp °C> d<duration s>  (start / timer)
+//             h0  (stop)
+// Box -> App: T<current °C> t<target> d<duration> r<remaining s> F<delay left s> h<1=heating> H<heartbeat> ...
+const SVC = 0xffe0, CHR = 0xffe1;
+const MEASURED = { '0-0': 3600, '1-1': 1440, '2-2': 855 }; // portion-mode -> seconds, seen in the official app
+const BY_MODE  = { 0: 3600, 1: 1440, 2: 855 };
+const T_MIN = 50, T_MAX = 85;
+
+const $ = id => document.getElementById(id);
+const store = {
+  get(k, d){ try { const v = localStorage.getItem('hb.' + k); return v == null ? d : JSON.parse(v); } catch { return d; } },
+  set(k, v){ try { localStorage.setItem('hb.' + k, JSON.stringify(v)); } catch {} }
+};
+
+const S = Object.assign({ temp: 70, portion: 2, mode: 2, when: 'now', at: '12:00', durOverride: {} }, store.get('settings', {}));
+const box = { T: null, t: null, d: 0, r: 0, F: 0, h: 0, batt: null };
+let dev = null, chr = null, demo = false, rxBuf = '', lastRxAt = 0;
+
+// ---- log ----
+const logEl = $('log');
+function log(dir, msg){
+  const ts = new Date().toLocaleTimeString('de-CH');
+  logEl.textContent += `${ts} ${dir} ${msg}\n`;
+  if (logEl.textContent.length > 20000) logEl.textContent = logEl.textContent.slice(-15000);
+  logEl.scrollTop = logEl.scrollHeight;
+}
+
+// ---- settings UI ----
+function saveSettings(){ store.set('settings', S); }
+function durKey(){ return S.portion + '-' + S.mode; }
+function durationSec(){
+  const o = S.durOverride[durKey()];
+  if (o) return o;
+  return MEASURED[durKey()] ?? BY_MODE[S.mode];
+}
+function setSeg(id, val){
+  for (const b of $(id).querySelectorAll('button')) b.setAttribute('aria-pressed', String(b.dataset.v === String(val)));
+}
+function fmtClock(d){ return d.toLocaleTimeString('de-CH', { hour: '2-digit', minute: '2-digit' }); }
+function fmtDur(s){
+  s = Math.max(0, Math.round(s));
+  const h = Math.floor(s / 3600), m = Math.floor(s % 3600 / 60), sec = s % 60;
+  return h ? `${h} h ${String(m).padStart(2,'0')} min` : `${m}:${String(sec).padStart(2,'0')} min`;
+}
+function plan(){
+  const d = durationSec(), now = new Date();
+  if (S.when === 'now') return { delay: 0, d, start: now, end: new Date(+now + d * 1000), late: false };
+  const [hh, mm] = S.at.split(':').map(Number);
+  const end = new Date(now); end.setHours(hh, mm, 0, 0);
+  if (end <= now) end.setDate(end.getDate() + 1);
+  let delay = Math.round((end - now) / 1000) - d;
+  const late = delay < 0;
+  if (late) delay = 0;
+  return { delay, d, start: new Date(+now + delay * 1000), end: late ? new Date(+now + d * 1000) : end, late };
+}
+function renderSettings(){
+  $('tOut').textContent = S.temp + ' °C';
+  $('tMinus').disabled = S.temp <= T_MIN; $('tPlus').disabled = S.temp >= T_MAX;
+  setSeg('segPortion', S.portion); setSeg('segMode', S.mode); setSeg('segWhen', S.when);
+  $('atRow').hidden = S.when !== 'at';
+  $('atTime').value = S.at;
+  const d = durationSec();
+  if (document.activeElement !== $('durMin')) $('durMin').value = +(d / 60).toFixed(2);
+  const hint = $('durHint');
+  if (S.durOverride[durKey()]) { hint.textContent = 'von dir eingestellt'; hint.className = 'hint'; }
+  else if (MEASURED[durKey()]) { hint.textContent = 'wie in der Original-App'; hint.className = 'hint'; }
+  else { hint.textContent = 'Schätzung, bitte prüfen'; hint.className = 'hint est'; }
+  const p = plan();
+  $('summary').innerHTML = S.when === 'now'
+    ? `Heizt <b>sofort</b> los, fertig ca. <b>${fmtClock(p.end)}</b> (${fmtDur(p.d)}).`
+    : p.late
+      ? `Zu knapp: Die Heizdauer ist länger als die Zeit bis ${S.at}. Startet sofort, fertig ca. <b>${fmtClock(p.end)}</b>.`
+      : `Heizen beginnt um <b>${fmtClock(p.start)}</b>${p.start.getDate() !== new Date().getDate() ? ' (morgen)' : ''}, Essen fertig um <b>${fmtClock(p.end)}</b>.`;
+  $('startBtn').textContent = S.when === 'now' ? 'Jetzt heizen' : 'Timer setzen';
+}
+
+$('tMinus').onclick = () => { S.temp = Math.max(T_MIN, S.temp - 5); saveSettings(); renderSettings(); };
+$('tPlus').onclick  = () => { S.temp = Math.min(T_MAX, S.temp + 5); saveSettings(); renderSettings(); };
+function segHandler(id, key, num){
+  $(id).addEventListener('click', e => {
+    const b = e.target.closest('button'); if (!b) return;
+    S[key] = num ? Number(b.dataset.v) : b.dataset.v; saveSettings(); renderSettings();
+  });
+}
+segHandler('segPortion', 'portion', true); segHandler('segMode', 'mode', true); segHandler('segWhen', 'when', false);
+$('atTime').addEventListener('change', e => { S.at = e.target.value || '12:00'; saveSettings(); renderSettings(); });
+$('durMin').addEventListener('change', e => {
+  const m = parseFloat(String(e.target.value).replace(',', '.'));
+  if (m > 0 && m <= 180) S.durOverride[durKey()] = Math.round(m * 60);
+  else delete S.durOverride[durKey()];
+  saveSettings(); renderSettings();
+});
+setInterval(() => { if (document.activeElement !== $('atTime')) renderSettings(); }, 15000);
+
+// ---- status UI ----
+function setConn(kind, text){
+  const p = $('conn'); p.className = 'pill ' + kind; p.querySelector('span').textContent = text;
+}
+function renderStatus(){
+  const connected = !!chr || demo;
+  $('tNow').innerHTML = (box.T ?? '–') + '<sup>°C</sup>';
+  $('batt').textContent = box.batt != null ? box.batt + ' %' : '–';
+  $('tTarget').textContent = box.t ? box.t + ' °C' : '–';
+  const st = $('state');
+  let cls = '', title, sub, active = false, pct = null;
+  if (!connected) { title = 'Keine Verbindung'; sub = 'Tippe auf „Mit HeatsBox verbinden“.'; }
+  else if (box.h === 1 && box.r > 0) {
+    cls = 'heating'; active = true; title = 'Heizt';
+    sub = `noch ${fmtDur(box.r)} · fertig ca. ${fmtClock(new Date(Date.now() + box.r * 1000))}`;
+    if (box.d) pct = Math.min(100, Math.max(0, 100 * (1 - box.r / box.d)));
+  } else if (box.F > 0) {
+    cls = 'waiting'; active = true; title = 'Timer läuft';
+    const start = new Date(Date.now() + box.F * 1000), end = new Date(+start + (box.d || 0) * 1000);
+    sub = `Heizen beginnt ${fmtClock(start)} · Essen fertig ${fmtClock(end)}`;
+  } else { title = 'Bereit'; sub = 'Box ist verbunden und heizt nicht.'; }
+  st.className = 'state ' + cls;
+  $('stateTitle').textContent = title; $('stateSub').textContent = sub;
+  $('barWrap').hidden = pct == null; if (pct != null) $('bar').style.width = pct + '%';
+  $('stopBtn').hidden = !active;
+  $('startBtn').disabled = !connected;
+  $('connectBtn').textContent = connected ? 'Trennen' : 'Mit HeatsBox verbinden';
+  $('connectBtn').className = 'btn ' + (connected ? 'secondary' : 'primary');
+}
+
+function onLine(line){
+  line = line.trim(); if (!line) return;
+  lastRxAt = Date.now();
+  const k = line[0], v = parseInt(line.slice(1), 10);
+  if (k !== 'H' && k !== 'r' && k !== 'F') log('<', line);
+  if (Number.isNaN(v)) return;
+  switch (k) {
+    case 'T': box.T = v; break;
+    case 't': box.t = v; break;
+    case 'd': box.d = v; break;
+    case 'r': box.r = v; break;
+    case 'F': box.F = v; break;
+    case 'h': box.h = v; if (v === 0) box.r = 0; break;
+  }
+  renderStatus();
+}
+
+// ---- sending ----
+const enc = new TextEncoder();
+let q = Promise.resolve();
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+function send(cmd){
+  q = q.then(async () => {
+    log('>', cmd);
+    if (demo) { demoBox.cmd(cmd); await sleep(20); return; }
+    if (!chr) throw new Error('nicht verbunden');
+    const data = enc.encode(cmd + '\r\n');
+    if (chr.writeValueWithoutResponse) await chr.writeValueWithoutResponse(data);
+    else await chr.writeValue(data);
+    await sleep(55);
+  }).catch(e => { log('!', 'Senden fehlgeschlagen: ' + e.message); });
+  return q;
+}
+async function startHeating(){
+  const p = plan();
+  const block = ['m' + S.mode, 'A' + S.portion, 'F' + p.delay, 't' + S.temp, 'd' + p.d];
+  $('startBtn').disabled = true;
+  for (let i = 0; i < 3; i++) for (const c of block) await send(c); // official app also repeats 3x
+  renderStatus();
+}
+async function stopHeating(){
+  for (let i = 0; i < 4; i++) await send('h0');
+  box.F = 0; box.r = 0; box.h = 0; renderStatus();
+}
+$('startBtn').onclick = startHeating;
+$('stopBtn').onclick = stopHeating;
+
+// ---- connection ----
+function checkIdentity(){
+  const saved = store.get('box', null);
+  const info = $('boxInfo');
+  if (!dev && !demo) { info.textContent = saved ? `Gemerkt: ${saved.name}` : ''; return; }
+  const id = demo ? 'demo' : dev.id;
+  if (saved && saved.id === id) { info.textContent = `Verbunden mit: ${saved.name} ✓`; setConn('on', saved.name); $('boxName').value = saved.name; }
+  else if (saved) { info.textContent = `Achtung: Das ist NICHT „${saved.name}“, sondern die andere Box.`; info.className = 'hint est'; setConn('busy', 'Andere Box'); }
+  else info.textContent = 'Diese Box ist noch nicht gemerkt.';
+}
+$('saveBox').onclick = () => {
+  if (!dev && !demo) { $('boxInfo').textContent = 'Zuerst verbinden, dann merken.'; return; }
+  const name = $('boxName').value.trim() || 'Meine Box';
+  store.set('box', { id: demo ? 'demo' : dev.id, name });
+  $('boxInfo').className = 'hint'; checkIdentity();
+};
+
+async function connect(){
+  if (chr || demo) return disconnect();
+  try {
+    setConn('busy', 'Suche …');
+    dev = await navigator.bluetooth.requestDevice({
+      filters: [{ namePrefix: 'HeatsBox' }, { services: [SVC] }],
+      optionalServices: [SVC, 'battery_service']
+    });
+    dev.addEventListener('gattserverdisconnected', onDisconnected);
+    setConn('busy', 'Verbinde …');
+    const server = await dev.gatt.connect();
+    const svc = await server.getPrimaryService(SVC);
+    chr = await svc.getCharacteristic(CHR);
+    chr.addEventListener('characteristicvaluechanged', e => {
+      rxBuf += new TextDecoder().decode(e.target.value);
+      const parts = rxBuf.split(/\r?\n/); rxBuf = parts.pop();
+      parts.forEach(onLine);
+      if (rxBuf.length > 64) { onLine(rxBuf); rxBuf = ''; }
+    });
+    await chr.startNotifications();
+    try {
+      const bs = await server.getPrimaryService('battery_service');
+      const bc = await bs.getCharacteristic('battery_level');
+      box.batt = (await bc.readValue()).getUint8(0);
+      bc.addEventListener('characteristicvaluechanged', e => { box.batt = e.target.value.getUint8(0); renderStatus(); });
+      await bc.startNotifications();
+    } catch (e) { log('!', 'Akku nicht lesbar'); }
+    setConn('on', 'Verbunden'); log('·', 'Verbunden mit ' + (dev.name || 'HeatsBox'));
+    checkIdentity(); renderStatus();
+  } catch (e) {
+    log('!', e.message); chr = null;
+    setConn('', e.name === 'NotFoundError' ? 'Abgebrochen' : 'Fehler');
+    renderStatus();
+  }
+}
+function onDisconnected(){ chr = null; setConn('', 'Getrennt'); log('·', 'Verbindung getrennt'); renderStatus(); }
+function disconnect(){
+  if (demo) { demo = false; clearInterval(demoBox.timer); setConn('', 'Nicht verbunden'); renderStatus(); return; }
+  try { dev && dev.gatt.connected && dev.gatt.disconnect(); } catch {}
+  onDisconnected();
+}
+$('connectBtn').onclick = () => {
+  if (!navigator.bluetooth && !demo) { $('noBt').hidden = false; return; }
+  connect();
+};
+
+// ---- demo (simulated box, for trying the app without Bluetooth) ----
+const demoBox = {
+  T: 22, t: 75, d: 0, r: 0, F: 0, h: 0, timer: null,
+  cmd(c){
+    const k = c[0], v = parseInt(c.slice(1), 10);
+    if (k === 't') this.t = v; if (k === 'd') this.d = v; if (k === 'F') this.F = v;
+    if (k === 'h' && v === 0) { this.h = 0; this.r = 0; this.F = 0; this.d = 0; this.emit('d0'); this.emit('r0'); this.emit('h0'); return; }
+    if (k === 'd') { this.emit('t' + this.t); this.emit('d' + v); if (this.F > 0) this.emit('F' + this.F); else { this.r = v; this.h = 1; this.emit('r' + v); this.emit('h1'); } }
+  },
+  emit(l){ setTimeout(() => onLine(l), 30); },
+  tick(){
+    if (this.F > 0) { this.F--; this.emit('F' + this.F); if (this.F === 0) { this.r = this.d; this.h = 1; this.emit('h1'); } }
+    else if (this.h === 1 && this.r > 0) { this.r--; this.emit('r' + this.r); if (this.T < this.t) { this.T++; this.emit('T' + this.T); } if (!this.r) { this.h = 0; this.emit('h0'); } }
+    else if (this.T > 22 && Math.random() < .3) { this.T--; this.emit('T' + this.T); }
+  }
+};
+function startDemo(){
+  demo = true; $('noBt').hidden = true; box.batt = 74;
+  setConn('on', 'Demo'); log('·', 'Demo-Modus: simulierte Box');
+  ['h0','m' + S.mode,'T22','t75','d0','r0','F0'].forEach(l => onLine(l));
+  demoBox.timer = setInterval(() => demoBox.tick(), 1000);
+  checkIdentity(); renderStatus();
+}
+$('demoBtn').onclick = startDemo;
+
+// ---- init ----
+if (!navigator.bluetooth) $('noBt').hidden = false;
+renderSettings(); renderStatus(); checkIdentity();
+if (location.hash === '#demo') startDemo();
+if ('serviceWorker' in navigator && (location.protocol === 'https:' || location.hostname === 'localhost')) {
+  navigator.serviceWorker.register('sw.js').then(() => log('·', 'Offline-Speicher bereit')).catch(e => log('!', 'Offline-Speicher nicht möglich: ' + e.message));
+}
+const offl = () => { $('offline').hidden = navigator.onLine; };
+addEventListener('online', offl); addEventListener('offline', offl); offl();
+})();
+</script>
+</body>
+</html>
